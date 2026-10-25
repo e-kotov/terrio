@@ -1,0 +1,24 @@
+# Exported functions
+export(as_sf)
+export(as_terrio)
+export(engine_version)
+export(read_sf)
+export(terrio_layers)
+export(terrio_read)
+export(write_sf)
+
+# From base (used by the print method)
+importFrom("utils", "head")
+
+# S3 methods
+S3method(print, terrio_layer)
+S3method("[", terrio_layer)
+S3method(as_sf, terrio_layer)
+S3method(as_sf, default)
+S3method(as_terrio, terrio_layer)
+S3method(as_terrio, sf)
+S3method(as_terrio, sfc)
+S3method(as_terrio, default)
+
+# Native bindings, registered by name (see R/extendr-wrappers.R)
+useDynLib(terrio, .registration = TRUE)

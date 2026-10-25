@@ -1,0 +1,8 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^src/Makevars\.win$
+^src/Makevars$
+^\.gitignore$
+^src/rust/target$
+^LICENSE\.note$
+^data-raw$

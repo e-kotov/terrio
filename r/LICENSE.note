@@ -1,0 +1,3 @@
+The R package wraps the Terrio Rust library (the `terrio` crate, MIT License,
+Copyright (c) 2025 Qiusheng Wu), which remains under its own license and is
+pinned at a published crates.io version; see src/rust/Cargo.toml.

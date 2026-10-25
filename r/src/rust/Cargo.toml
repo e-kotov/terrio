@@ -1,0 +1,32 @@
+[package]
+name = 'terrioR'
+publish = false
+version = '0.1.0'
+edition = '2021'
+rust-version = '1.90'
+license = 'MIT'
+description = 'Native R bindings for the Terrio geospatial library'
+
+# The R binding crate is standalone: an empty `[workspace]` table keeps it out
+# of the repository's Cargo workspace when built inside the checkout, and is
+# harmless in a packaged tarball.
+[workspace]
+
+[lib]
+crate-type = [ 'rlib', 'staticlib' ]
+name = 'terrioR'
+
+[dependencies]
+extendr-api = '0.9'
+# Existing engine dependencies, reused only to inspect source column types
+# before the engine can erase unsigned-overflow information.
+flatgeobuf = { version = '=6.0.1', default-features = false }
+parquet = { version = '=58.4.0', default-features = false }
+# The pinned published Terrio crate: the same package builds from a source
+# tarball outside the repository checkout. See r/README.md for the engine
+# provenance and any difference from the fork's core crate.
+terrio = { version = '=0.5.0', default-features = false, features = ['sqlite', 'flatgeobuf', 'parquet'] }
+
+[profile.release]
+lto = true
+codegen-units = 1

@@ -1,0 +1,122 @@
+name: R bindings
+on:
+  push:
+    branches: [main, "feat/**", "r-bindings/**"]
+    paths: ["r/**", "!r/*.md", "!r/tests/testthat/fixtures/README.md", ".github/workflows/r-bindings.yml"]
+  pull_request:
+    paths: ["r/**", "!r/*.md", "!r/tests/testthat/fixtures/README.md", ".github/workflows/r-bindings.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: r-bindings-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_BUILD_JOBS: "2"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_HTTP_MULTIPLEXING: "false"
+jobs:
+  r-package:
+    name: R package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.6.1'
+          use-public-rspm: true
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          targets: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-gnu' || '' }}
+          components: rustfmt, clippy
+      - name: Align macOS C and Rust deployment targets
+        if: runner.os == 'macOS'
+        shell: bash
+        run: echo "MACOSX_DEPLOYMENT_TARGET=26.0" >> "$GITHUB_ENV"
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: r
+          packages: deps::.
+          dependencies: '"all"'
+      - name: Binding formatting and Clippy
+        shell: bash
+        run: |
+          cargo fmt --manifest-path r/src/rust/Cargo.toml --all -- --check
+          cargo clippy --manifest-path r/src/rust/Cargo.toml --locked --all-targets -- -D warnings
+      - name: Build source tarball, install and check outside checkout
+        shell: bash
+        run: |
+          R CMD build r
+          mkdir -p "${RUNNER_TEMP}/terrio-package-check"
+          cp terrio_0.1.0.tar.gz "${RUNNER_TEMP}/terrio-package-check/"
+          cd "${RUNNER_TEMP}/terrio-package-check"
+          R CMD INSTALL terrio_0.1.0.tar.gz
+          R CMD check --no-manual terrio_0.1.0.tar.gz
+          Rscript -e 'stopifnot(any(grepl("^Status: OK", readLines("terrio.Rcheck/00check.log"))))'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        # The log service timed out in the initial run. Validation above is
+        # mandatory; exporting a second copy of its logs is advisory.
+        continue-on-error: true
+        with:
+          name: r-check-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/terrio-package-check/terrio.Rcheck/*.log
+            ${{ runner.temp }}/terrio-package-check/terrio.Rcheck/*.out
+  no-gdal-runtime:
+    name: Linux install and runtime without GDAL or sf
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    container:
+      image: rocker/r-base:4.6.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools only
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends build-essential curl ca-certificates
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.90.0
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Confirm no GDAL in environment
+        run: |
+          if ldconfig -p 2>/dev/null | grep -qi libgdal; then exit 1; fi
+          if command -v gdalinfo; then exit 1; fi
+          Rscript -e 'stopifnot(!requireNamespace("sf", quietly=TRUE))'
+      - name: Install tarball outside checkout
+        run: |
+          R CMD build r
+          mkdir -p /tmp/terrio-install
+          cp terrio_0.1.0.tar.gz /tmp/terrio-install/
+          cd /tmp/terrio-install
+          R CMD INSTALL terrio_0.1.0.tar.gz
+      - name: Check installed shared library linkage
+        run: |
+          SHLIB=$(Rscript -e 'cat(system.file("libs", paste0("terrio", .Platform$dynlib.ext), package="terrio"))')
+          test -f "$SHLIB"
+          ldd "$SHLIB" > /tmp/terrio-ldd.txt
+          cat /tmp/terrio-ldd.txt
+          if grep -qiE 'gdal|proj|geos|libsqlite|spatialite|not found' /tmp/terrio-ldd.txt; then exit 1; fi
+      - name: Native read and write without sf
+        run: |
+          Rscript - <<'RS'
+          library(terrio)
+          stopifnot(!requireNamespace("sf", quietly=TRUE))
+          src <- file.path(tempdir(), "source.geojson")
+          writeLines('{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"id":1,"name":"NA"},"geometry":{"type":"Point","coordinates":[1,2]}}]}', src)
+          x <- read_sf(src)
+          stopifnot(x$id == 1L, identical(x$name, "NA"), identical(attr(x,"crs"), "EPSG:4326"))
+          for (ext in c("gpkg", "fgb", "parquet", "shp", "geojson")) {
+            dest <- file.path(tempdir(), paste0("roundtrip.", ext))
+            write_sf(x, dest)
+            y <- read_sf(dest)
+            stopifnot(identical(y$id,x$id), identical(y$name,x$name), identical(y$geometry,x$geometry))
+          }
+          stopifnot(!"sf" %in% loadedNamespaces())
+          cat("No-GDAL native read/write passed:", engine_version(), "\n")
+          RS
